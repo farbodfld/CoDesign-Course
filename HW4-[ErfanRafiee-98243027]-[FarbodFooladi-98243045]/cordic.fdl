@@ -1,0 +1,195 @@
+ipblock armcore
+{
+	iptype "armsystem";
+	ipparm "exec = cordic";
+}
+
+
+ipblock starter(out data : ns(1))
+{
+	iptype "armsystemsource";
+	ipparm "core = armcore";
+	ipparm "address = 0x80000000";
+}
+
+ipblock theta_input(out data : tc(32))
+{
+    iptype "armsystemsource";
+    ipparm "core = armcore";
+    ipparm "address=0x80000004";
+}
+
+ipblock iteration_input(out data : tc(32))
+{
+    iptype "armsystemsource";
+    ipparm "core = armcore";
+    ipparm "address = 0x80000008";
+}
+
+ipblock shift_input(out data : tc(32))
+{
+    iptype "armsystemsink";
+    ipparm "core = armcore";
+    ipparm "address = 0x8000000C";
+}
+
+ipblock cos_output(in data : tc(32))
+{
+    iptype "armsystemsink";
+    ipparm "core = armcore";
+    ipparm "address = 0x80000010";
+}
+
+ipblock sin_output(in data : tc(32))
+{
+    iptype "armsystemsink";
+    ipparm "core = armcore";
+    ipparm "address = 0x80000014";
+}
+
+
+dp Cordic ( in in_start : ns(1);			
+			in in_theta : tc(32);		
+			in in_itr : tc(32);
+			in in_shift : tc(32);		
+			out out_data_x : tc(32);
+			out out_data_y : tc(32))
+			{
+				
+	lookup atantable : tc(32) = { 
+								0x4000, 
+							        0x25C8, 
+								0x13F6, 
+								0x0A22, 
+								0x0516, 
+								0x028B, 
+								0x0145, 
+								0x00A2,   
+								0x0051, 
+								0x0029, 
+								0x0014, 
+								0x000A,   
+								0x0005, 
+								0x0003, 
+								0x0002, 
+								0x0001 
+								};
+							
+	reg X, Y, theta, shift, angle, step, iteration, tmp_x, tmp_y: tc(32);
+	reg start : ns(1);
+	sig cmp, cmp2, cmp3 : ns(1);
+
+	always
+	{
+		start = in_start;
+		out_data_x = tmp_x;
+		out_data_y = tmp_y;
+	}
+
+	sfg shift_gt
+	{
+		Y = X;
+		X = -1 * Y;
+		
+			
+	}
+
+	sfg shift_lt
+	{
+		Y = -1 * X;
+		X = Y;	
+	}
+
+	sfg shift_eq
+	{	
+		Y = Y;
+		X = X;
+	}
+	
+	sfg get_data 
+	{
+		shift = in_shift;
+		theta = in_theta;
+		iteration = in_itr;
+		X = 0x4DBA;
+		Y = 0;
+		step = 0;
+		angle = 0;
+	}
+
+	sfg loop 
+	{ 
+		cmp = (theta < angle);
+		X = cmp ? X + (Y >> step): X - (Y >> step);
+		Y = cmp ?  Y - (X >> step): Y + (X >> step);
+		angle = cmp ? angle - atantable(step) : angle + atantable(step);
+		step = step + 1;
+	}
+
+	sfg output 
+	{
+		tmp_x = X;
+		tmp_y = Y;
+		$display("Hardware : sin = ", out_data_y, ", cos = ", out_data_x);
+		
+	}
+
+	sfg negative
+	{
+		X = -1 * X;
+	}
+
+	sfg skip
+	{
+		tmp_x = 0;
+		tmp_y = 0;
+			
+	}
+	sfg do_nothing
+	{
+		
+	}
+}
+
+fsm controller(Cordic)
+{
+	initial s0;
+    state s1, s2, s3, s4;
+
+    @s0 if (start == 1) then (get_data) -> s1;
+        else (do_nothing) -> s0;
+		
+    @s1 if (step < iteration) then (loop) -> s1;
+	else (do_nothing) -> s2;
+		
+    @s2 if (X < 0) then (negative) -> s3;
+        else (do_nothing) -> s3;
+
+    @s3 if (shift > 0) then (shift_gt) -> s4;
+	else if (shift < 0) then (shift_lt) -> s4;
+	else (shift_eq) -> s4;
+	
+    @s4 if (start == 1) then (output) -> s4;
+	else (do_nothing) -> s0;
+ }
+
+dp TestBench 
+{
+	sig in_start: ns(1);
+	sig in_theta, in_itr, in_shift, out_data_x, out_data_y : tc(32);
+
+	use Cordic(in_start, in_theta, in_itr, in_shift, out_data_x, out_data_y);
+	
+	use armcore;
+	use starter(in_start);
+	use theta_input(in_theta);
+	use iteration_input(in_itr);
+	use shift_input(in_shift);
+	use cos_output(out_data_x);
+	use sin_output(out_data_y);	
+}
+
+system S 
+{
+	TestBench;
+}
